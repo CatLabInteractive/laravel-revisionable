@@ -143,7 +143,7 @@ abstract class Revisionable extends Model
 
             $this->childrenCache[$revisionId][$childProperty] = $relation;
         }
-        return $this->childrenCache[$revisionId][$childProperty];
+        return clone $this->childrenCache[$revisionId][$childProperty];
     }
 
     /**
@@ -182,7 +182,7 @@ abstract class Revisionable extends Model
      */
     public function addRevisionedChildren($children, $childProperty, $revisionId)
     {
-        if (!isset($this->alteredChildren)) {
+        if (!isset($this->alteredChildren[$childProperty])) {
             $this->alteredChildren[$childProperty] = [];
         }
 
@@ -199,7 +199,7 @@ abstract class Revisionable extends Model
      */
     public function editRevisionedChildren($children, $childProperty, $revisionId)
     {
-        if (!isset($this->alteredChildren)) {
+        if (!isset($this->alteredChildren[$childProperty])) {
             $this->alteredChildren[$childProperty] = [];
         }
 
@@ -215,7 +215,7 @@ abstract class Revisionable extends Model
      */
     public function removeRevisionedChildren($children, $childProperty, $revisionId)
     {
-        if (!isset($this->alteredChildren)) {
+        if (!isset($this->alteredChildren[$childProperty])) {
             $this->alteredChildren[$childProperty] = [];
         }
 
@@ -360,16 +360,6 @@ abstract class Revisionable extends Model
     }
 
     /**
-     * @param array $options
-     * @throws SaveCalledException
-     * @return void
-     */
-    public function save(array $options = [])
-    {
-        throw new SaveCalledException("Model::save() was called on a revisionable model. Please call saveRevision");
-    }
-
-    /**
      * @param int $currentRevision
      * @return $this
      */
@@ -479,6 +469,37 @@ abstract class Revisionable extends Model
     }
 
     /**
+     * @return RevisionableAttributes
+     */
+    public function getLatest()
+    {
+        return $this->getRevisionedAttributes(self::REV_LATEST);
+    }
+
+    /**
+     * Check if there are any altered children.
+     * @param string $relation Optionally provide relation name to only check for altered children of this relation
+     * @return bool
+     */
+    public function hasAlteredChildren($relation = null)
+    {
+        if (!isset($this->alteredChildren)) {
+            return false;
+        }
+
+        if (count($this->alteredChildren) == 0) {
+            return false;
+        }
+
+        if ($relation) {
+            return isset($this->alteredChildren[$relation])
+                && count($this->alteredChildren[$relation]) > 0;
+        } else {
+            return true;
+        }
+    }
+
+    /**
      * @param int $currentRevision
      * @param User $author
      * @return bool
@@ -535,7 +556,7 @@ abstract class Revisionable extends Model
 
             $newAttributes->save();
 
-            $changed = $changed || true;
+            $changed = true;
         }
 
         // Check for children
@@ -566,10 +587,15 @@ abstract class Revisionable extends Model
      */
     protected function saveRevisionedChildren($attributeName, $currentRevision, User $author = null)
     {
-        $relationship = $this->alteredChildren[$attributeName] ?? [];
-        $changed = false;
+        $alteredChildren = $this->alteredChildren[$attributeName] ?? [];
 
-        foreach ($relationship as $child) {
+        // No count? Ignore.
+        if (count($alteredChildren) === 0) {
+            return false;
+        }
+
+        $changed = false;
+        foreach ($alteredChildren as $child) {
             /*
              * For new entities we need to set the foreign key.
              */
@@ -583,10 +609,10 @@ abstract class Revisionable extends Model
             // Force relations to reload (in case they exist already)
             $child->relations = [];
 
-            // Set revisionable parent
-            $child->setRevisionableParent($this);
-
             if ($child instanceof Revisionable) {
+                // Set revisionable parent
+                $child->setRevisionableParent($this);
+
                 $changed = $child->saveRevisionedRecursively($currentRevision, $author) || $changed;
             } elseif ($child instanceof Model) {
                 $changed = true;
